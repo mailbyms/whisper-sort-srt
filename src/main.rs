@@ -103,7 +103,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         // 如果最后一行长度小于10个字符，尝试与上一行合并
         if char_count < 10 && !result.is_empty() {
             let last_line = result.pop().unwrap();
-            let combined_text = format!("{} {}", last_line.text, current_line.trim());
+            let combined_text = format!("{}{}", last_line.text, current_line.trim());
             result.push(SubtitleLine {
                 text: combined_text,
                 start_time: last_line.start_time,
