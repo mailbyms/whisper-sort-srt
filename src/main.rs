@@ -59,11 +59,15 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     let punctuation = ['，', ',', '。', '！', '？', '；', '：', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
 
     for (i, word) in words.iter().enumerate() {
+        //println!("{}", word.word);
         let word_len = word.word.chars().count();
         let current_duration = word.end - current_start;
         
-        // 如果当前行加上新词超过25个字符，或者时长超过10秒，则强制换行
-        if char_count + word_len > 25 || current_duration > 10.0 {
+        // 检查当前词是否是英文单词或数字或标点符号
+        let is_english_or_number = word.word.chars().all(|c| c.is_ascii_alphanumeric() || punctuation.contains(&c));
+        
+        // 如果当前行加上新词超过16个字符，或者时长超过10秒，则强制换行
+        if (char_count + word_len > 16 || current_duration > 10.0) && !is_english_or_number {
             if !current_line.is_empty() {
                 result.push(SubtitleLine {
                     text: current_line.trim().to_string(),
@@ -82,7 +86,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         char_count += word_len;
         word_index = i;
 
-        // 如果遇到标点符号，且当前行长度在10~25之间，立即分割
+        // 如果遇到标点符号，且当前行长度大于10，立即换行
         if word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= 10 {
             result.push(SubtitleLine {
                 text: current_line.trim().to_string(),
@@ -100,8 +104,8 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
 
     // 处理最后一行
     if !current_line.is_empty() {
-        // 如果最后一行长度小于10个字符，尝试与上一行合并
-        if char_count < 10 && !result.is_empty() {
+        // 如果最后一行长度小于5个字符，尝试与上一行合并
+        if char_count < 5 && !result.is_empty() {
             let last_line = result.pop().unwrap();
             let combined_text = format!("{}{}", last_line.text, current_line.trim());
             result.push(SubtitleLine {
