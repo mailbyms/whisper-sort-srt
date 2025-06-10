@@ -76,44 +76,36 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
 
     // 识别并打印出中文分词
     let text = words.iter().map(|w| w.word.clone()).collect::<String>();
-    let tokens = utils::chinese_tokenize(&text);
-    //println!("打印中文分词");
-    for (_i, token) in tokens.iter().enumerate() {
-      //  println!("{}", token);
-    }
+    let mut tokens: Vec<&str> = utils::chinese_tokenize(&text);
+    let mut word_tokens: Vec<bool> = vec![false; words.len()];
+
+    // println!("中文分词：");
+    // for (_i, token) in tokens.iter().enumerate() {
+    //     println!("{}", token);
+    // }
+    // 为 words 更新对应中文分词信息
+    match_segments(&mut tokens, words, &mut word_tokens);
 
     let punctuation = ['，', ',', '。', '！', '？', '；', '：', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
 
     for (i, word) in words.iter().enumerate() {
-        //println!("{}", word.word);
+        // println!("word:{}, is_token:{}", word.word, word_tokens[i]);
+
         let word_len = word.word.chars().count();
         let current_duration = word.end - current_start;
         
         // 检查当前词是否是英文单词或数字或标点符号
         let is_english_or_number = word.word.chars().all(|c| c.is_ascii_alphanumeric() || punctuation.contains(&c));
-        
-        // 如果当前行加上新词超过16个字符，或者时长超过10秒，则强制换行
-        if (char_count + word_len > LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_english_or_number {
-            if !current_line.is_empty() {
-                result.push(SubtitleLine {
-                    text: current_line.trim().to_string(),
-                    start_time: current_start,
-                    end_time: words[i-1].end,
-                });
-
-                current_line.clear();
-                current_start = word.start;
-                char_count = 0;
-            }
-        }
-
+               
         // 添加当前词
         current_line.push_str(&word.word);
         char_count += word_len;
         word_index = i;
 
         // 如果遇到标点符号，且当前行长度大于10，立即换行
-        if word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH {
+        // 16个字符，或者时长超过10秒，立即换行（当前word不能是英文字母，当前word符合中文分词）
+        if (word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH)
+        || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_english_or_number && word_tokens[i]) {
             result.push(SubtitleLine {
                 text: current_line.trim().to_string(),
                 start_time: current_start,
@@ -125,7 +117,10 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
                 current_start = words[i + 1].start;
             }
             char_count = 0;
+
+            continue;
         }
+
     }
 
     // 处理最后一行
@@ -149,6 +144,57 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     }
 
     result
+}
+
+fn match_segments(token_segments: &mut Vec<&str>, word_segments: &[Word], word_tokens: &mut [bool]) {
+    let mut _v_idx = 0;  // 记录语音切片的元素下标
+    let mut w_idx = 0;  // 记录中文分词的元素下标
+    let mut word_iter = word_segments.iter();
+
+    while !token_segments.is_empty() && w_idx < word_segments.len() {
+        let mut v_acc = String::new();
+        let mut w_acc = String::new();
+        
+        // 获取第一个元素
+        if let Some(v) = token_segments.first() {
+            v_acc.push_str(v);
+            token_segments.remove(0);
+            _v_idx += 1;
+        }
+        
+        if let Some(w) = word_iter.next() {
+            w_acc.push_str(&w.word);
+            w_idx += 1;
+        }
+
+        loop {
+            let v_len = v_acc.chars().count();
+            let w_len = w_acc.chars().count();
+            if v_len == w_len {
+                // println!("匹配成功：'{}'->'{}' [{}]->[{}]", v_acc, w_acc, _v_idx, w_idx);
+                word_tokens[w_idx-1] = true;
+                break;
+            }else if v_len > w_len {
+                if let Some(w) = word_iter.next() {
+                    w_acc.push_str(&w.word);
+                    w_idx += 1;
+                    continue;
+                } else {
+                    // println!("word_segments is empty!");
+                    break;
+                }
+            }else {
+                if let Some(v) = token_segments.first() {
+                    v_acc.push_str(v);
+                    token_segments.remove(0);
+                    _v_idx += 1;
+                }else {
+                    // println!("token_segments is empty!");
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn main() -> io::Result<()> {
