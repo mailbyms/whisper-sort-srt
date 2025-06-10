@@ -94,18 +94,20 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         let word_len = word.word.chars().count();
         let current_duration = word.end - current_start;
         
-        // 检查当前词是否是英文单词或数字或标点符号
-        let is_english_or_number = word.word.chars().all(|c| c.is_ascii_alphanumeric() || punctuation.contains(&c));
-               
+        // 检查当前词是否是英文单词或数字，保持英文单词和数字的完整性。
+        // 由于中文分词器可以保证英文单词不会被切割（但不保证数字）。这里只需要判断是否为数字，小数字点和负号
+        //let is_english_or_number = word.word.chars().all(|c| c.is_ascii_alphanumeric() || punctuation.contains(&c));
+        let is_number = word.word.chars().all(|c| c.is_ascii_digit() || c=='.' || c=='-');
+                 
         // 添加当前词
         current_line.push_str(&word.word);
         char_count += word_len;
         word_index = i;
 
         // 如果遇到标点符号，且当前行长度大于10，立即换行
-        // 16个字符，或者时长超过10秒，立即换行（当前word不能是英文字母，当前word符合中文分词）
+        // 16个字符，或者时长超过10秒，立即换行（当前word不能是数字，当前word符合中文分词）
         if (word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH)
-        || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_english_or_number && word_tokens[i]) {
+        || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_number && word_tokens[i]) {
             result.push(SubtitleLine {
                 text: current_line.trim().to_string(),
                 start_time: current_start,
