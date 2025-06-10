@@ -1,9 +1,18 @@
+mod utils;
+
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
+
+// 每行超过16个中文字：应该截断分行
+const LINE_MAX_WORD_LENGTH: usize = 16;
+// 每行超过10个中文字：可以截断分行
+const LINE_MIN_WORD_LENGTH: usize = 10;
+// 每行时长超过10秒：应该截断分行
+const LINE_MAX_DURATION:  f64 = 10.0;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -50,11 +59,28 @@ fn format_time(seconds: f64) -> String {
 }
 
 fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
+    // 如果 words 的长度不超过最优长度，直接返回
+    if words.len() <= LINE_MAX_WORD_LENGTH {
+        return vec![SubtitleLine {
+            text: words.iter().map(|w| w.word.clone()).collect::<String>(),
+            start_time: words[0].start,
+            end_time: words[words.len()-1].end,
+        }];
+    }
+
     let mut result = Vec::new();
     let mut current_line = String::new();
     let mut current_start = words[0].start;
     let mut char_count = 0;
     let mut word_index = 0;
+
+    // 识别并打印出中文分词
+    let text = words.iter().map(|w| w.word.clone()).collect::<String>();
+    let tokens = utils::chinese_tokenize(&text);
+    //println!("打印中文分词");
+    for (_i, token) in tokens.iter().enumerate() {
+      //  println!("{}", token);
+    }
 
     let punctuation = ['，', ',', '。', '！', '？', '；', '：', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
 
@@ -67,7 +93,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         let is_english_or_number = word.word.chars().all(|c| c.is_ascii_alphanumeric() || punctuation.contains(&c));
         
         // 如果当前行加上新词超过16个字符，或者时长超过10秒，则强制换行
-        if (char_count + word_len > 16 || current_duration > 10.0) && !is_english_or_number {
+        if (char_count + word_len > LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_english_or_number {
             if !current_line.is_empty() {
                 result.push(SubtitleLine {
                     text: current_line.trim().to_string(),
@@ -87,7 +113,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         word_index = i;
 
         // 如果遇到标点符号，且当前行长度大于10，立即换行
-        if word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= 10 {
+        if word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH {
             result.push(SubtitleLine {
                 text: current_line.trim().to_string(),
                 start_time: current_start,
@@ -105,7 +131,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     // 处理最后一行
     if !current_line.is_empty() {
         // 如果最后一行长度小于5个字符，尝试与上一行合并
-        if char_count < 5 && !result.is_empty() {
+        if char_count <= LINE_MIN_WORD_LENGTH/2 && !result.is_empty() {
             let last_line = result.pop().unwrap();
             let combined_text = format!("{}{}", last_line.text, current_line.trim());
             result.push(SubtitleLine {
