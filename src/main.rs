@@ -230,20 +230,23 @@ fn match_segments(token_segments: &mut Vec<&str>, word_segments: &[Word], word_t
  *  返回值：
  *      Vec<String> - 合并后的字幕字符串列表
  */
-fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<String> {
+fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<SubtitleLine> {
     let mut merged_blocks: Vec<SubtitleLine> = Vec::new();
     let mut i = 0;
     
+    // 标识循环是否需要进行 merge 操作。当前字幕太短，而上一个字幕太长时，会传到下个循环
+    let mut prev_need_merge = false; 
     while i < blocks.len() {
         let current = &blocks[i];
+        let duration = current.end_time - current.start_time;
+        let current_need_merge = duration < 1.0;
         
         // 检查是否可以与上一个块合并
         if let Some(prev) = merged_blocks.last_mut() {
-            let duration = current.end_time - current.start_time;
-            let gap = current.start_time - prev.end_time;
+            let gap = current.start_time - prev.end_time;            
             
-            // 检查合并条件
-            if duration < 1.0 && gap < 1.0 {
+            // 检查是否执行合并操作
+            if (prev_need_merge || current_need_merge) && gap < 1.0 {
                 let prev_lines: Vec<&str> = prev.text.lines().collect();
                 
                 // 检查行数限制
@@ -251,7 +254,7 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<String> {
                     let mut combined_text = prev.text.clone();
                     if !prev.text.eq_ignore_ascii_case(&current.text){
                         combined_text = if prev.text.chars().count() + current.text.chars().count() <= LINE_MAX_WORD_LENGTH {
-                            format!("{} {}", prev.text, current.text)
+                            format!("{}{}", prev.text, current.text)
                         } else {
                             format!("{}\n{}", prev.text, current.text)
                         };
@@ -260,11 +263,13 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<String> {
                     // 更新上一个块
                     prev.text = combined_text;
                     prev.end_time = current.end_time;
-                    println!("合并：{} -> {}", format_time(prev.start_time), format_time(current.start_time));
+                    //println!("合并：{} -> {}", format_time(prev.start_time), format_time(current.start_time));
 
+                    prev_need_merge = false;
                     i += 1;
                     continue;
                 }
+                
             }
         }
         
@@ -273,20 +278,14 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<String> {
             text: current.text.clone(),
             start_time: current.start_time,
             end_time: current.end_time,
-        });
+        });                
+        
         i += 1;
+        prev_need_merge = current_need_merge;
     }
     
     // 转换回字幕格式
-    merged_blocks.into_iter().enumerate().map(|(j, block)| {
-        format!(
-            "{}\n{} --> {}\n{}\n\n",
-            j + 1,
-            format_time(block.start_time),
-            format_time(block.end_time),
-            block.text
-        )
-    }).collect()
+    merged_blocks    
 }
 
 
@@ -299,16 +298,15 @@ fn main() -> io::Result<()> {
         process::exit(1);
     }
 
+    println!("读入原始json文件：{}", args.input.to_string_lossy()); 
     // 读取 JSON 文件
     let file = File::open(&args.input)?;
     let whisper_output: WhisperOutput = serde_json::from_reader(file)?;
     
     // 生成输出文件名
     let output_path = args.input.with_extension("srt");
-    let output_path_str = output_path.to_string_lossy();
     
-    println!("开始生成字幕文件：{}", output_path_str);
-    
+    println!("开始分割过长的字幕块");    
     // 存储所有字幕内容
     let mut all_subtitles = Vec::new();
     
@@ -321,13 +319,18 @@ fn main() -> io::Result<()> {
     // 合并字幕
     println!("合并时长过短的字幕块");
     let merged_subtitles = merge_subtitles(all_subtitles);
+    //let merged_subtitles = all_subtitles;
     
     // 一次性写入文件
     println!("写入文件：{}", output_path.to_string_lossy());
     let mut output_file = File::create(&output_path)?;
-    for subtitle in merged_subtitles {
-        write!(output_file, "{}", subtitle)?;
-        //print!("{}", subtitle);
+    for (j, subtitle) in merged_subtitles.iter().enumerate() {
+        write!(output_file, "{}\n{} --> {}\n{}\n\n",
+            j + 1,
+            format_time(subtitle.start_time),
+            format_time(subtitle.end_time),
+            subtitle.text
+        )?;
     }
     
     println!("字幕文件生成完成！");
