@@ -43,13 +43,19 @@ struct WhisperOutput {
     segments: Vec<Segment>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SubtitleLine {
     text: String,
     start_time: f64,
     end_time: f64,
 }
 
+/** 将秒数格式化为 SRT 时间格式 (HH:MM:SS,mmm)
+ *  参数：
+ *      seconds: f64 - 要格式化的秒数
+ *  返回值：
+ *      String - 格式化后的时间字符串，格式为 HH:MM:SS,mmm
+ */
 fn format_time(seconds: f64) -> String {
     let hours = (seconds / 3600.0) as u32;
     let minutes = ((seconds % 3600.0) / 60.0) as u32;
@@ -58,6 +64,12 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02},{:03}", hours, minutes, seconds_whole, milliseconds)
 }
 
+/** 根据标点符号和长度规则将文本分割成字幕行
+ *  参数：
+ *      words: &[Word] - 包含时间戳的单词列表
+ *  返回值：
+ *      Vec<SubtitleLine> - 分割后的字幕行列表，每行包含文本内容和时间信息
+ */
 fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     // 如果 words 的长度不超过最优长度，直接返回
     if words.len() <= LINE_MAX_WORD_LENGTH {
@@ -148,6 +160,14 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     result
 }
 
+/** 将中文分词结果与语音切片进行匹配
+ *  参数：
+ *      token_segments: &mut Vec<&str> - 中文分词结果
+ *      word_segments: &[Word] - 语音切片
+ *      word_tokens: &mut [bool] - 用于标记匹配结果的布尔数组
+ *  返回值：
+ *      无
+ */
 fn match_segments(token_segments: &mut Vec<&str>, word_segments: &[Word], word_tokens: &mut [bool]) {
     let mut _v_idx = 0;  // 记录语音切片的元素下标
     let mut w_idx = 0;  // 记录中文分词的元素下标
@@ -199,6 +219,77 @@ fn match_segments(token_segments: &mut Vec<&str>, word_segments: &[Word], word_t
     }
 }
 
+/** 合并相邻的字幕行
+ *  合并规则：
+ *      1. 仅合并持续时间小于1秒的字幕
+ *      2. 相邻字幕间隔大于1秒时不合并
+ *      3. 合并时根据长度决定是否换行
+ *      4. 每个字幕块最多2行内容
+ *  参数：
+ *      blocks: Vec<SubtitleLine> - 要合并的字幕块行列表
+ *  返回值：
+ *      Vec<String> - 合并后的字幕字符串列表
+ */
+fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<String> {
+    let mut merged_blocks: Vec<SubtitleLine> = Vec::new();
+    let mut i = 0;
+    
+    while i < blocks.len() {
+        let current = &blocks[i];
+        
+        // 检查是否可以与上一个块合并
+        if let Some(prev) = merged_blocks.last_mut() {
+            let duration = current.end_time - current.start_time;
+            let gap = current.start_time - prev.end_time;
+            
+            // 检查合并条件
+            if duration < 1.0 && gap < 1.0 {
+                let prev_lines: Vec<&str> = prev.text.lines().collect();
+                
+                // 检查行数限制
+                if prev_lines.len() < 2 {
+                    let mut combined_text = prev.text.clone();
+                    if !prev.text.eq_ignore_ascii_case(&current.text){
+                        combined_text = if prev.text.chars().count() + current.text.chars().count() <= LINE_MAX_WORD_LENGTH {
+                            format!("{} {}", prev.text, current.text)
+                        } else {
+                            format!("{}\n{}", prev.text, current.text)
+                        };
+                    }                     
+                    
+                    // 更新上一个块
+                    prev.text = combined_text;
+                    prev.end_time = current.end_time;
+                    println!("合并：{} -> {}", format_time(prev.start_time), format_time(current.start_time));
+
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        
+        // 如果不能合并，添加为新块
+        merged_blocks.push(SubtitleLine {
+            text: current.text.clone(),
+            start_time: current.start_time,
+            end_time: current.end_time,
+        });
+        i += 1;
+    }
+    
+    // 转换回字幕格式
+    merged_blocks.into_iter().enumerate().map(|(j, block)| {
+        format!(
+            "{}\n{} --> {}\n{}\n\n",
+            j + 1,
+            format_time(block.start_time),
+            format_time(block.end_time),
+            block.text
+        )
+    }).collect()
+}
+
+
 fn main() -> io::Result<()> {
     let args = Args::parse();
     
@@ -217,42 +308,28 @@ fn main() -> io::Result<()> {
     let output_path_str = output_path.to_string_lossy();
     
     println!("开始生成字幕文件：{}", output_path_str);
-    println!("----------------------------------------");
     
     // 存储所有字幕内容
     let mut all_subtitles = Vec::new();
-    let mut subtitle_index = 1;
     
     // 处理所有片段
     for segment in whisper_output.segments.iter() {
         let subtitle_lines: Vec<SubtitleLine> = split_text_by_punctuation(&segment.words);
-        
-        for line in subtitle_lines {
-            let output = format!(
-                "{}\n{} --> {}\n{}\n\n",
-                subtitle_index,
-                format_time(line.start_time),
-                format_time(line.end_time),
-                line.text
-            );
-            
-            // 保存到内存
-            all_subtitles.push(output.clone());
-            
-            // 输出到控制台
-            print!("{}", output);
-            
-            subtitle_index += 1;
-        }
+        all_subtitles.extend(subtitle_lines);
     }
+    
+    // 合并字幕
+    println!("合并时长过短的字幕块");
+    let merged_subtitles = merge_subtitles(all_subtitles);
     
     // 一次性写入文件
+    println!("写入文件：{}", output_path.to_string_lossy());
     let mut output_file = File::create(&output_path)?;
-    for subtitle in all_subtitles {
+    for subtitle in merged_subtitles {
         write!(output_file, "{}", subtitle)?;
+        //print!("{}", subtitle);
     }
     
-    println!("----------------------------------------");
     println!("字幕文件生成完成！");
     
     Ok(())
