@@ -215,15 +215,17 @@ fn main() -> io::Result<()> {
     // 生成输出文件名
     let output_path = args.input.with_extension("srt");
     let output_path_str = output_path.to_string_lossy();
-    let mut output_file = File::create(&output_path)?;
     
     println!("开始生成字幕文件：{}", output_path_str);
     println!("----------------------------------------");
     
-    // 写入 SRT 格式
+    // 存储所有字幕内容
+    let mut all_subtitles = Vec::new();
     let mut subtitle_index = 1;
+    
+    // 处理所有片段
     for segment in whisper_output.segments.iter() {
-        let subtitle_lines = split_text_by_punctuation(&segment.words);
+        let subtitle_lines: Vec<SubtitleLine> = split_text_by_punctuation(&segment.words);
         
         for line in subtitle_lines {
             let output = format!(
@@ -234,14 +236,20 @@ fn main() -> io::Result<()> {
                 line.text
             );
             
-            // 写入文件
-            write!(output_file, "{}", output)?;
+            // 保存到内存
+            all_subtitles.push(output.clone());
             
             // 输出到控制台
             print!("{}", output);
             
             subtitle_index += 1;
         }
+    }
+    
+    // 一次性写入文件
+    let mut output_file = File::create(&output_path)?;
+    for subtitle in all_subtitles {
+        write!(output_file, "{}", subtitle)?;
     }
     
     println!("----------------------------------------");
