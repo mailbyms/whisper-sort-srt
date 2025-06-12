@@ -64,6 +64,39 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}:{:02},{:03}", hours, minutes, seconds_whole, milliseconds)
 }
 
+/** 过滤掉语气词
+ *  参数：
+ *      text: &str - 要过滤的文本
+ *  返回值：
+ *      String - 过滤后的文本
+ */
+fn filter_filler_words(text: &str) -> String {
+    let filler_words = ["嗯", "呃", "啊", "哦", "哈", "嘿", "哼", "呵", "哎", "唉", "嗨", "呀", "哟", "喂", "诶"];
+    let mut result = text.to_string();
+    
+    // 过滤独立的语气词（前后有标点或空格）
+    for word in filler_words {
+        let patterns = [
+            format!("{} ", word),
+            format!(" {}", word),
+            format!("{},", word),
+            format!("{}.", word),
+            format!("{}。", word),
+            format!("{}，", word),
+            format!("{}！", word),
+            format!("{}？", word),
+            format!("{}；", word),
+            format!("{}：", word),
+        ];
+        
+        for pattern in patterns {
+            result = result.replace(&pattern, "");
+        }
+    }
+    
+    result
+}
+
 /** 根据标点符号和长度规则将文本分割成字幕行
  *  参数：
  *      words: &[Word] - 包含时间戳的单词列表
@@ -71,10 +104,11 @@ fn format_time(seconds: f64) -> String {
  *      Vec<SubtitleLine> - 分割后的字幕行列表，每行包含文本内容和时间信息
  */
 fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
+    let text = words.iter().map(|w| w.word.clone()).collect::<String>();
     // 如果 words 的长度不超过最优长度，直接返回
     if words.len() <= LINE_MAX_WORD_LENGTH {
         return vec![SubtitleLine {
-            text: words.iter().map(|w| w.word.clone()).collect::<String>(),
+            text: filter_filler_words(&text),
             start_time: words[0].start,
             end_time: words[words.len()-1].end,
         }];
@@ -91,18 +125,12 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     let mut tokens: Vec<&str> = utils::chinese_tokenize(&text);
     let mut word_tokens: Vec<bool> = vec![false; words.len()];
 
-    // println!("中文分词：");
-    // for (_i, token) in tokens.iter().enumerate() {
-    //     println!("{}", token);
-    // }
     // 为 words 更新对应中文分词信息
     match_segments(&mut tokens, words, &mut word_tokens);
 
     let punctuation = ['，', ',', '。', '！', '？', '；', '：', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
 
     for (i, word) in words.iter().enumerate() {
-        // println!("word:{}, is_token:{}", word.word, word_tokens[i]);
-
         let word_len = word.word.chars().count();
         let current_duration = word.end - current_start;
         
@@ -121,7 +149,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         if (word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH)
         || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_number && word_tokens[i]) {
             result.push(SubtitleLine {
-                text: current_line.trim().to_string(),
+                text: filter_filler_words(&current_line.trim().to_string()),
                 start_time: current_start,
                 end_time: word.end,
             });
@@ -134,7 +162,6 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
 
             continue;
         }
-
     }
 
     // 处理最后一行
@@ -144,13 +171,13 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
             let last_line = result.pop().unwrap();
             let combined_text = format!("{}{}", last_line.text, current_line.trim());
             result.push(SubtitleLine {
-                text: combined_text,
+                text: filter_filler_words(&combined_text),
                 start_time: last_line.start_time,
                 end_time: words[word_index].end,
             });
         } else {
             result.push(SubtitleLine {
-                text: current_line.trim().to_string(),
+                text: filter_filler_words(&current_line.trim().to_string()),
                 start_time: current_start,
                 end_time: words[word_index].end,
             });
