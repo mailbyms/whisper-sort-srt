@@ -11,8 +11,10 @@ use std::process;
 const LINE_MAX_WORD_LENGTH: usize = 16;
 // 每行超过10个中文字：可以截断分行
 const LINE_MIN_WORD_LENGTH: usize = 10;
-// 每行时长超过10秒：应该截断分行
-const LINE_MAX_DURATION:  f64 = 10.0;
+// 每行时长超过6秒：应该截断分行
+const LINE_MAX_DURATION:  f64 = 6.0;
+// 每行时长超过2秒：可以截断分行
+const LINE_MIN_DURATION:  f64 = 2.0;
 // 单词置信度阈值，低于此值的单词将被跳过
 // whisper.cpp预置7个颜色，置信度从0~1通过3次方后落到7个颜色区域。https://github.com/mailbyms/whisper-color
 // 可知 p<=0.52 时在第1个颜色（红色），大模型亦建议抛弃 P 值低于 0.5 以下的内容
@@ -144,7 +146,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     // 为 words 更新对应中文分词信息
     match_segments(&mut tokens, words, &mut word_tokens);
 
-    let punctuation = ['，', ',', '。', '！', '？', '；', '：', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
+    let punctuation = ['，', ',', '。', '！', '？', '?', '；', ';', '：', ':', '、', '…', '—', '（', '）', '《', '》', '"', '"', '\'', '\'', ' '];
 
     for (i, word) in words.iter().enumerate() {
         let word_len = word.word.chars().count();
@@ -160,10 +162,10 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         char_count += word_len;
         word_index = i;
 
-        // 如果遇到标点符号，且当前行长度大于10，立即换行
-        // 16个字符，或者时长超过10秒，立即换行（当前word不能是数字，当前word符合中文分词）
-        if (word.word.chars().any(|c| punctuation.contains(&c)) && char_count >= LINE_MIN_WORD_LENGTH)
-        || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration > LINE_MAX_DURATION) && !is_number && word_tokens[i]) {
+        // 可选：如果遇到标点符号，且当前行长度达到10个字符，或者时长达到2秒，可以切割
+        // 强制：16个字符，或者时长超过6秒，立即换行（当前word不能是数字，且当前word符合中文分词）
+        if (word.word.chars().any(|c| punctuation.contains(&c)) && (char_count >= LINE_MIN_WORD_LENGTH || current_duration >= LINE_MIN_DURATION))
+        || ((char_count >= LINE_MAX_WORD_LENGTH || current_duration >= LINE_MAX_DURATION) && !is_number && word_tokens[i]) {
             result.push(SubtitleLine {
                 text: filter_filler_words(&current_line.trim().to_string()),
                 start_time: current_start,
