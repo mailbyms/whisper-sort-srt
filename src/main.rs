@@ -13,6 +13,11 @@ const LINE_MAX_WORD_LENGTH: usize = 16;
 const LINE_MIN_WORD_LENGTH: usize = 10;
 // 每行时长超过10秒：应该截断分行
 const LINE_MAX_DURATION:  f64 = 10.0;
+// 单词置信度阈值，低于此值的单词将被跳过
+// whisper.cpp预置7个颜色，置信度从0~1通过3次方后落到7个颜色区域。https://github.com/mailbyms/whisper-color
+// 可知 p<=0.52 时在第1个颜色（红色），大模型亦建议抛弃 P 值低于 0.5 以下的内容
+// 但从实际识别结果（peppa pig s01e01），选择 0.1
+const WORD_PROBABILITY_THRESHOLD: f64 = 0.1;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -21,11 +26,12 @@ struct Args {
     input: PathBuf,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Word {
     start: f64,
     end: f64,
     word: String,
+    probability: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -104,11 +110,21 @@ fn filter_filler_words(text: &str) -> String {
  *      Vec<SubtitleLine> - 分割后的字幕行列表，每行包含文本内容和时间信息
  */
 fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
+    // 先过滤掉低置信度的单词
+    let filtered_words: Vec<Word> = words.iter()
+        .filter(|w| w.probability >= WORD_PROBABILITY_THRESHOLD)
+        .cloned()
+        .collect();
+    if filtered_words.is_empty() {
+        return Vec::new();
+    }
+    let words = &filtered_words;
+
     let text = words.iter().map(|w| w.word.clone()).collect::<String>();
     // 如果 words 的长度不超过最优长度，直接返回
-    if words.len() <= LINE_MAX_WORD_LENGTH {
+    if text.len() <= LINE_MAX_WORD_LENGTH {
         return vec![SubtitleLine {
-            text: filter_filler_words(&text),
+            text: filter_filler_words(&text).trim().to_string(),
             start_time: words[0].start,
             end_time: words[words.len()-1].end,
         }];
@@ -248,7 +264,7 @@ fn match_segments(token_segments: &mut Vec<&str>, word_segments: &[Word], word_t
 
 /** 合并相邻的字幕行
  *  合并规则：
- *      1. 仅合并持续时间小于1秒的字幕
+ *      1. 仅合并持续时间小于0.5秒的字幕
  *      2. 相邻字幕间隔大于1秒时不合并
  *      3. 合并时根据长度决定是否换行
  *      4. 每个字幕块最多2行内容
@@ -266,7 +282,7 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<SubtitleLine> {
     while i < blocks.len() {
         let current = &blocks[i];
         let duration = current.end_time - current.start_time;
-        let current_need_merge = duration < 1.0;
+        let current_need_merge = duration < 0.5;
         
         // 检查是否可以与上一个块合并
         if let Some(prev) = merged_blocks.last_mut() {
@@ -290,7 +306,7 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<SubtitleLine> {
                     // 更新上一个块
                     prev.text = combined_text;
                     prev.end_time = current.end_time;
-                    //println!("合并：{} -> {}", format_time(prev.start_time), format_time(current.start_time));
+                    println!("合并：{} -> {}", current.text,  prev.text);
 
                     prev_need_merge = false;
                     i += 1;
@@ -339,7 +355,10 @@ fn main() -> io::Result<()> {
     
     // 处理所有片段
     for segment in whisper_output.segments.iter() {
-        let subtitle_lines: Vec<SubtitleLine> = split_text_by_punctuation(&segment.words);
+        let subtitle_lines: Vec<SubtitleLine> = split_text_by_punctuation(&segment.words)
+            .into_iter()
+            .filter(|line| !line.text.trim().is_empty())
+            .collect();
         all_subtitles.extend(subtitle_lines);
     }
     
