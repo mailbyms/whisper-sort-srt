@@ -128,6 +128,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
     let filtered_words: Vec<Word> = words
         .iter()
         .filter(|w| w.probability >= WORD_PROBABILITY_THRESHOLD)
+        .filter(|w| w.end > w.start)
         .cloned()
         .collect();
     if filtered_words.is_empty() {
@@ -338,7 +339,7 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<SubtitleLine> {
                     let mut combined_text = prev.text.clone();
                     if !prev.text.eq_ignore_ascii_case(&current.text) {
                         combined_text = if prev.text.chars().count() + current.text.chars().count()
-                            <= LINE_MAX_WORD_LENGTH
+                            <= LINE_MAX_WORD_LENGTH + 5
                         {
                             format!("{}{}", prev.text, current.text)
                         } else {
