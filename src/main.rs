@@ -20,6 +20,12 @@ const LINE_MIN_DURATION: f64 = 2.0;
 // 可知 p<=0.52 时在第1个颜色（红色），大模型亦建议抛弃 P 值低于 0.5 以下的内容
 // 但从实际识别结果（peppa pig s01e01），选择 0.1
 const WORD_PROBABILITY_THRESHOLD: f64 = 0.1;
+// 字幕合并时长阈值，持续时间小于此值的字幕需要合并
+const MERGE_MIN_DURATION: f64 = 0.5;
+// 字幕合并间隔阈值，相邻字幕间隔小于此值时可以合并
+const MERGE_MAX_GAP: f64 = 1.0;
+// 字幕合并行数限制，每个字幕块最多包含的行数
+const MERGE_MAX_LINES: usize = 2;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -176,7 +182,7 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         char_count += word_len;
         word_index = i;
 
-        // 检查当前word的结束时间和下一个word的开始时间，间隔超过4秒则强制立即换行
+        // 检查当前word的结束时间和下一个word的开始时间，间隔超过2秒则强制立即换行
         let comming_silence_break = if i + 1 < words.len() {
             let next_word = &words[i + 1];
             let time_gap = next_word.start - word.end;
@@ -189,7 +195,6 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
         if comming_silence_break {
             println!("word:'{}' will have comming_silence_break", &word.word);
         }
-
 
         // 可选：如果遇到标点符号，且当前行长度达到10个字符，或者时长达到2秒，可以切割
         // 强制：16个字符，或者时长超过6秒，或者时间间隔超过4秒，立即换行（当前word不能是数字，且当前word符合中文分词）
@@ -221,38 +226,13 @@ fn split_text_by_punctuation(words: &[Word]) -> Vec<SubtitleLine> {
 
     // 处理最后一行
     if !current_line.is_empty() {
-        // 如果最后一行长度小于5个字符，尝试与上一行合并
-        // 但如果上一行是因为comming_silence_break而成行的，则不能合并
-        if char_count <= LINE_MIN_WORD_LENGTH / 2 && !result.is_empty() {
-            let last_line = result.last().unwrap();
-            if !last_line.silence_break {
-                let last_line = result.pop().unwrap();
-                let combined_text = format!("{}{}", last_line.text, current_line.trim());
-                result.push(SubtitleLine {
-                    text: filter_filler_words(&combined_text),
-                    start_time: last_line.start_time,
-                    end_time: words[word_index].end,
-                    silence_break: false,
-                });
-                println!("current line '{}' too short, combine with last line:{}", current_line, combined_text);
-            } else {
-                result.push(SubtitleLine {
-                    text: filter_filler_words(&current_line.trim().to_string()),
-                    start_time: current_start,
-                    end_time: words[word_index].end,
-                    silence_break: false,
-                });
-                println!("## new line:{} (cannot merge due to silence_break)", current_line);
-            }
-        } else {
-            result.push(SubtitleLine {
-                text: filter_filler_words(&current_line.trim().to_string()),
-                start_time: current_start,
-                end_time: words[word_index].end,
-                silence_break: false,
-            });
-            println!("## new line:{}", current_line);
-        }
+        result.push(SubtitleLine {
+            text: filter_filler_words(&current_line.trim().to_string()),
+            start_time: current_start,
+            end_time: words[word_index].end,
+            silence_break: false,
+        });
+        println!("## new line:{}", current_line);
     }
 
     result
@@ -341,18 +321,20 @@ fn merge_subtitles(blocks: Vec<SubtitleLine>) -> Vec<SubtitleLine> {
     while i < blocks.len() {
         let current = &blocks[i];
         let duration = current.end_time - current.start_time;
-        let current_need_merge = duration < 0.5;
+        let current_need_merge = duration < MERGE_MIN_DURATION;
 
         // 检查是否可以与上一个块合并
         if let Some(prev) = merged_blocks.last_mut() {
             let gap = current.start_time - prev.end_time;
 
             // 检查是否执行合并操作
-            if (prev_need_merge || current_need_merge) && gap < 1.0 {
+            // 如果上一个字幕是因为silence_break而成行的，则不能合并
+            if (prev_need_merge || current_need_merge) && gap < MERGE_MAX_GAP && !prev.silence_break
+            {
                 let prev_lines: Vec<&str> = prev.text.lines().collect();
 
                 // 检查行数限制
-                if prev_lines.len() < 2 {
+                if prev_lines.len() < MERGE_MAX_LINES {
                     let mut combined_text = prev.text.clone();
                     if !prev.text.eq_ignore_ascii_case(&current.text) {
                         combined_text = if prev.text.chars().count() + current.text.chars().count()
